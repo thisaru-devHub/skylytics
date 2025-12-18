@@ -105,9 +105,13 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 # Tab 1: Prediction
+# Tab 1: Prediction
 with tab1:
     st.subheader("Flight Price Estimator")
+
+    # 1. Main Prediction Button
     if st.button("Predict Fare", type="primary"):
+        # A. Spot Price Prediction (Random Forest)
         price = predict_price(airline_name, source_name, dest_name, stops, journey_date, dep_time, arr_time)
 
         col1, col2 = st.columns([1, 2])
@@ -116,7 +120,69 @@ with tab1:
         with col2:
             st.success(f"Route: {source_name} ➝ {dest_name} ({stops})")
 
-        st.info("Prediction is based on the Random Forest model trained on historical flight data.")
+        st.info("Spot prediction based on Random Forest Model.")
+
+        st.markdown("---")
+
+        # B. ARIMA Time Series Forecast
+        st.subheader("📅 30-Day Market Forecast (ARIMA)")
+
+        if ts_data is not None:
+            # Smart Forecasting Logic:
+            # Look for seasonal matches in the ARIMA-learned trend
+            future_dates = [journey_date + datetime.timedelta(days=i) for i in range(30)]
+            forecast_values = []
+
+            for date in future_dates:
+                # Find matching month/day in historical trend
+                match = ts_data[
+                    (ts_data['Date'].dt.month == date.month) &
+                    (ts_data['Date'].dt.day == date.day)
+                    ]
+
+                if not match.empty:
+                    val = match['ARIMA_Price'].values[0]
+                else:
+                    # Fallback to monthly average if specific day is missing
+                    monthly_match = ts_data[ts_data['Date'].dt.month == date.month]
+                    val = monthly_match['ARIMA_Price'].mean() if not monthly_match.empty else ts_data[
+                        'ARIMA_Price'].mean()
+
+                forecast_values.append(val)
+
+            # Plotting
+            df_forecast = pd.DataFrame({
+                'Date': future_dates,
+                'ARIMA Trend': forecast_values
+            })
+
+            fig_forecast = px.line(
+                df_forecast,
+                x='Date',
+                y='ARIMA Trend',
+                markers=True,
+                title=f"Projected Price Trend (ARIMA Analysis)"
+            )
+
+            fig_forecast.update_traces(line_color='#8A2BE2', line_width=3)
+            fig_forecast.update_layout(yaxis_title="Trend Price (₹)", hovermode="x unified", height=400)
+
+            st.write(
+                "This forecast analyzes historical seasonal patterns using an **ARIMA** model to predict market movement.")
+            st.plotly_chart(fig_forecast, use_container_width=True)
+
+            # Trend Insight
+            change = ((forecast_values[-1] - forecast_values[0]) / forecast_values[0]) * 100
+            if change > 5:
+                st.warning(f"📈 **Trend Alert:** Prices expected to RISE by ~{round(change)}% soon.")
+            elif change < -5:
+                st.success(f"📉 **Good News:** Prices expected to DROP by ~{round(abs(change))}% soon.")
+            else:
+                st.info("⚖️ **Stable Market:** No major price fluctuations expected.")
+
+        else:
+            st.warning(
+                "⚠️ Time Series data not found. Please run 'Time_Series_Analysis.ipynb' to generate the forecast model.")
 
 # Tab 2: Compare Airlines (Auto-Refresh Version)
 with tab2:
