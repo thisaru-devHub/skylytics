@@ -22,14 +22,20 @@ def load_data():
         st.error("⚠️ Model files missing! Please run 'fix_model.py' first.")
         st.stop()
 
+    # Load ARIMA Time Series Data (New)
+    try:
+        ts_data = joblib.load('time_series_data.pkl')
+    except FileNotFoundError:
+        ts_data = None  # Handle gracefully if notebook wasn't run yet
+
     try:
         raw_data = pd.read_excel("Data_Train.xlsx")
     except:
         raw_data = pd.DataFrame()
-    return model, maps, raw_data
+    return model, maps, raw_data, ts_data
 
 
-model, maps, raw_data = load_data()
+model, maps, raw_data, ts_data = load_data()
 
 # Helper: Inverse Maps for Dropdowns
 inv_airlines = {v: k for k, v in maps['airlines'].items()}
