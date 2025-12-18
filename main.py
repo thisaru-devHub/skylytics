@@ -2,13 +2,14 @@ import streamlit as st
 import pandas as pd
 import joblib
 import datetime
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.exceptions import NotFittedError
-
+import plotly.express as px  # NEW: For interactive charts
 
 # Page Config
-st.set_page_config(page_title="Skylytics Prototype", layout="wide")
+st.set_page_config(
+    page_title="Skylytics Prototype",
+    page_icon="✈️",
+    layout="wide"
+)
 
 
 # --- 1. Load Data & Initialize ---
@@ -18,10 +19,9 @@ def load_data():
         model = joblib.load('flight_rf_model.pkl')
         maps = joblib.load('encoding_maps.pkl')
     except FileNotFoundError:
-        st.error("⚠️ Model files missing! Please run the 'Save Block' in your Jupyter Notebook.")
+        st.error("⚠️ Model files missing! Please run 'fix_model.py' first.")
         st.stop()
 
-    # Load raw data for "Historical Data" tab if available
     try:
         raw_data = pd.read_excel("Data_Train.xlsx")
     except:
@@ -34,15 +34,15 @@ model, maps, raw_data = load_data()
 # Helper: Inverse Maps for Dropdowns
 inv_airlines = {v: k for k, v in maps['airlines'].items()}
 inv_dest = {v: k for k, v in maps['destinations'].items()}
-# Note: Your notebook dropped 'Source', so we provide a static list for the UI
 source_list = ["Delhi", "Kolkata", "Bangalore", "Mumbai", "Chennai"]
 
 # --- 2. UI Layout ---
-st.title("✈️ Skylytics: Airfare Prediction Prototype")
-st.markdown("AI-Driven Dynamic Pricing Analysis System")
+st.title("✈️ Skylytics: AI-Driven Airfare Prediction")
+st.markdown("### Dynamic Pricing & Travel Insights Prototype")
+st.markdown("---")
 
 # Sidebar Inputs
-st.sidebar.header("Flight Details")
+st.sidebar.header("Flight Parameters")
 airline_name = st.sidebar.selectbox("Airline", list(inv_airlines.values()))
 source_name = st.sidebar.selectbox("Source (Origin)", source_list)
 dest_name = st.sidebar.selectbox("Destination", list(inv_dest.values()))
@@ -52,7 +52,7 @@ dep_time = st.sidebar.time_input("Departure Time", datetime.time(10, 00))
 arr_time = st.sidebar.time_input("Arrival Time", datetime.time(12, 30))
 
 
-# --- 3. Prediction Logic (Smart Handler) ---
+# --- 3. Prediction Logic ---
 def predict_price(airline, source, dest, stops, date, dep, arr):
     # Calculate Duration
     dep_datetime = datetime.datetime.combine(date, dep)
@@ -65,7 +65,6 @@ def predict_price(airline, source, dest, stops, date, dep, arr):
     dur_mins = (duration.seconds % 3600) // 60
 
     # Build Input Data
-    # We create a dictionary with ALL possible data points
     input_dict = {
         'Total_Stops': maps['stops'][stops],
         'Airline': maps['airlines'][airline],
@@ -78,19 +77,13 @@ def predict_price(airline, source, dest, stops, date, dep, arr):
         'Arrival_Time_minute': arr.minute,
         'Duration_hours': dur_hours,
         'Duration_mins': dur_mins,
-        # We include Source here just in case, but filter it out later if the model doesn't use it
         'Source': source
     }
 
-    # Create DataFrame
     df = pd.DataFrame([input_dict])
 
-    # CRITICAL: Filter columns to match EXACTLY what the notebook model trained on
-    # This automatically drops 'Source' if your notebook dropped it
+    # Filter columns to match training data
     valid_cols = maps['columns']
-
-    # Handle missing columns gracefully
-    # If the app calculated something (like Duration_mins) but the model dropped it, this fixes it.
     df_final = df.reindex(columns=valid_cols, fill_value=0)
 
     return model.predict(df_final)[0]
@@ -98,7 +91,11 @@ def predict_price(airline, source, dest, stops, date, dep, arr):
 
 # --- 4. Functionalities Tabs ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "💰 Prediction", "📊 Airline Comparator", "📈 Time Trends", "💡 Smart Insights", "🗃️ Historical Data"
+    "💰 Prediction",
+    "📊 Airline Comparator",
+    "📈 Time Trends",
+    "💡 AI Insights",
+    "🗃️ Historical Data"
 ])
 
 # Tab 1: Prediction
@@ -106,50 +103,114 @@ with tab1:
     st.subheader("Flight Price Estimator")
     if st.button("Predict Fare", type="primary"):
         price = predict_price(airline_name, source_name, dest_name, stops, journey_date, dep_time, arr_time)
-        st.success(f"Estimated Price: ₹ {round(price, 2)}")
-        st.info("Prediction based on Random Forest Model trained on historical data.")
+
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.metric("Estimated Fare", f"₹ {round(price, 2)}")
+        with col2:
+            st.success(f"Route: {source_name} ➝ {dest_name} ({stops})")
+
+        st.info("Prediction is based on the Random Forest model trained on historical flight data.")
 
 # Tab 2: Compare Airlines
 with tab2:
-    if st.button("Compare All Airlines"):
+    st.subheader("Compare Airlines")
+    if st.button("Generate Comparison"):
         prices = {}
         for air in inv_airlines.values():
             p = predict_price(air, source_name, dest_name, stops, journey_date, dep_time, arr_time)
             prices[air] = p
 
+        # Create DataFrame for Plotly
         df_comp = pd.DataFrame(list(prices.items()), columns=['Airline', 'Price']).sort_values('Price')
-        st.bar_chart(df_comp.set_index('Airline'))
-        st.success(f"Cheapest Option: {df_comp.iloc[0]['Airline']}")
 
-# Tab 3: Time Trends
+        # Interactive Bar Chart
+        fig = px.bar(
+            df_comp,
+            x='Price',
+            y='Airline',
+            orientation='h',
+            title="Price Comparison by Airline",
+            text_auto='.2s',
+            color='Price',
+            color_continuous_scale='Bluyl'
+        )
+        fig.update_layout(showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.success(f"Recommendation: **{df_comp.iloc[0]['Airline']}** is the cheapest option.")
+
+# Tab 3: Time Trends (The Upgraded Tab!)
 with tab3:
-    st.write("Price trend throughout the day:")
-    hours = range(0, 24, 2)
-    prices = []
-    for h in hours:
-        t = datetime.time(h, 0)
-        prices.append(predict_price(airline_name, source_name, dest_name, stops, journey_date, t, arr_time))
+    st.subheader("Intraday Price Trends")
+    st.write("See how the price changes depending on the time of day you fly.")
 
-    fig, ax = plt.subplots()
-    ax.plot(hours, prices, marker='o')
-    ax.set_xlabel("Hour")
-    ax.set_ylabel("Price")
-    st.pyplot(fig)
+    # Generate data for all 24 hours
+    hours = list(range(24))
+    trend_prices = []
+
+    progress_bar = st.progress(0)
+    for i, h in enumerate(hours):
+        t = datetime.time(h, 0)
+        p = predict_price(airline_name, source_name, dest_name, stops, journey_date, t, arr_time)
+        trend_prices.append(p)
+        progress_bar.progress((i + 1) / 24)
+    progress_bar.empty()  # Remove bar when done
+
+    # Create DataFrame for Plotly
+    df_trend = pd.DataFrame({
+        'Hour of Day': hours,
+        'Estimated Price (₹)': trend_prices
+    })
+
+    # Find cheapest hour
+    min_price = df_trend['Estimated Price (₹)'].min()
+    best_hour = df_trend.loc[df_trend['Estimated Price (₹)'] == min_price, 'Hour of Day'].iloc[0]
+
+    # Interactive Line Chart
+    fig = px.line(
+        df_trend,
+        x='Hour of Day',
+        y='Estimated Price (₹)',
+        title=f"Price Trend for {journey_date}",
+        markers=True
+    )
+
+    # Customizing the look
+    fig.update_traces(line_color='#00CC96', line_width=4)
+    fig.update_layout(
+        xaxis_title="Hour of Day (24h)",
+        yaxis_title="Price (₹)",
+        hovermode="x unified"  # Shows nice tooltip line
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.success(f"💡 **Smart Tip:** Flying around **{best_hour}:00** seems to be the cheapest time today!")
 
 # Tab 4: Insights
 with tab4:
+    st.subheader("Market Intelligence")
     rank = maps['airlines'][airline_name]
-    if rank < 3:
-        st.success(f"✅ {airline_name} is typically a budget-friendly carrier.")
-    else:
-        st.info(f"ℹ️ {airline_name} is a premium/mid-range carrier.")
 
-    if stops == "non-stop":
-        st.info("⚡ Non-stop flights usually cost more due to convenience.")
+    col1, col2 = st.columns(2)
+    with col1:
+        if rank < 3:
+            st.success(f"✅ **Budget Carrier:** {airline_name} is historically one of the most affordable.")
+        else:
+            st.info(f"ℹ️ **Premium/Standard:** {airline_name} typically offers more amenities but may cost more.")
+
+    with col2:
+        if stops == "non-stop":
+            st.warning("⚡ **Premium for Speed:** Non-stop flights often cost 15-20% more than connecting flights.")
+        else:
+            st.success("💰 **Saver Choice:** You are likely saving money by choosing a flight with stops.")
 
 # Tab 5: Data
 with tab5:
+    st.subheader("Historical Dataset")
     if not raw_data.empty:
-        st.dataframe(raw_data.head(50))
+        st.dataframe(raw_data.head(100))
+        st.caption(f"Total Records: {len(raw_data)}")
     else:
         st.warning("Data_Train.xlsx not found.")
