@@ -112,33 +112,40 @@ with tab1:
 
         st.info("Prediction is based on the Random Forest model trained on historical flight data.")
 
-# Tab 2: Compare Airlines
+# Tab 2: Compare Airlines (Auto-Refresh Version)
 with tab2:
     st.subheader("Compare Airlines")
-    if st.button("Generate Comparison"):
-        prices = {}
-        for air in inv_airlines.values():
-            p = predict_price(air, source_name, dest_name, stops, journey_date, dep_time, arr_time)
-            prices[air] = p
+    st.write("Real-time price comparison for your selected route.")
 
-        # Create DataFrame for Plotly
-        df_comp = pd.DataFrame(list(prices.items()), columns=['Airline', 'Price']).sort_values('Price')
+    # 1. Calculate prices automatically (No button needed)
+    prices = {}
+    for air in inv_airlines.values():
+        p = predict_price(air, source_name, dest_name, stops, journey_date, dep_time, arr_time)
+        prices[air] = p
 
-        # Interactive Bar Chart
-        fig = px.bar(
-            df_comp,
-            x='Price',
-            y='Airline',
-            orientation='h',
-            title="Price Comparison by Airline",
-            text_auto='.2s',
-            color='Price',
-            color_continuous_scale='Bluyl'
-        )
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+    # 2. Create DataFrame for Plotly
+    df_comp = pd.DataFrame(list(prices.items()), columns=['Airline', 'Price']).sort_values('Price')
 
-        st.success(f"Recommendation: **{df_comp.iloc[0]['Airline']}** is the cheapest option.")
+    # 3. Interactive Bar Chart
+    fig = px.bar(
+        df_comp,
+        x='Price',
+        y='Airline',
+        orientation='h',
+        title="Price Comparison by Airline",
+        text_auto='.2s',
+        color='Price',
+        color_continuous_scale='Bluyl'
+    )
+
+    # Customize layout
+    fig.update_layout(showlegend=False, height=500)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 4. Smart Recommendation
+    cheapest_airline = df_comp.iloc[0]['Airline']
+    cheapest_price = df_comp.iloc[0]['Price']
+    st.success(f"🏆 **Recommendation:** **{cheapest_airline}** is the cheapest option (~₹{int(cheapest_price)}).")
 
 # Tab 3: Time Trends (The Upgraded Tab!)
 with tab3:
