@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import joblib
 import datetime
-import plotly.express as px  # NEW: For interactive charts
+import plotly.express as px
 
 # Page Config
 st.set_page_config(
@@ -12,30 +12,31 @@ st.set_page_config(
 )
 
 
-# --- 1. Load Data & Initialize ---
+# --- 1. Load Data (Fail-Safe Version) ---
 @st.cache_resource
-def load_data():
+def load_data_final():
+    # A. Load Random Forest Model (Required)
     try:
         model = joblib.load('flight_rf_model.pkl')
         maps = joblib.load('encoding_maps.pkl')
     except FileNotFoundError:
-        st.error("⚠️ Model files missing! Please run 'fix_model.py' first.")
+        st.error("⚠️ Critical Error: 'flight_rf_model.pkl' is missing. Please run your 'fix_model.py' script once.")
         st.stop()
 
-    # Load ARIMA Time Series Data (New)
-    try:
-        ts_data = joblib.load('time_series_data.pkl')
-    except FileNotFoundError:
-        ts_data = None  # Handle gracefully if notebook wasn't run yet
-
+    # B. Load Raw Data (For Live Seasonality Calculation)
     try:
         raw_data = pd.read_excel("Data_Train.xlsx")
-    except:
-        raw_data = pd.DataFrame()
-    return model, maps, raw_data, ts_data
+        # Clean data immediately for the app
+        raw_data.dropna(inplace=True)
+        raw_data['Date_of_Journey'] = pd.to_datetime(raw_data['Date_of_Journey'], dayfirst=True)
+    except FileNotFoundError:
+        raw_data = pd.DataFrame()  # Return empty if missing
+
+    return model, maps, raw_data
 
 
-model, maps, raw_data, ts_data = load_data()
+# Load everything into variables
+model, maps, raw_data = load_data_final()
 
 # Helper: Inverse Maps for Dropdowns
 inv_airlines = {v: k for k, v in maps['airlines'].items()}
@@ -45,7 +46,6 @@ source_list = ["Delhi", "Kolkata", "Bangalore", "Mumbai", "Chennai"]
 # --- 2. UI Layout ---
 st.title("✈️ Skylytics: AI-Driven Airfare Prediction")
 st.markdown("### Dynamic Pricing & Travel Insights Prototype")
-st.markdown("---")
 
 # Sidebar Inputs
 st.sidebar.header("Flight Parameters")
@@ -58,7 +58,7 @@ dep_time = st.sidebar.time_input("Departure Time", datetime.time(10, 00))
 arr_time = st.sidebar.time_input("Arrival Time", datetime.time(12, 30))
 
 
-# --- 3. Prediction Logic ---
+# --- 3. Prediction Function ---
 def predict_price(airline, source, dest, stops, date, dep, arr):
     # Calculate Duration
     dep_datetime = datetime.datetime.combine(date, dep)
@@ -87,8 +87,6 @@ def predict_price(airline, source, dest, stops, date, dep, arr):
     }
 
     df = pd.DataFrame([input_dict])
-
-    # Filter columns to match training data
     valid_cols = maps['columns']
     df_final = df.reindex(columns=valid_cols, fill_value=0)
 
@@ -97,199 +95,150 @@ def predict_price(airline, source, dest, stops, date, dep, arr):
 
 # --- 4. Functionalities Tabs ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "💰 Prediction",
+    "💰 Prediction & Trends",
     "📊 Airline Comparator",
-    "📈 Time Trends",
+    "📈 Intraday Trends",
     "💡 AI Insights",
     "🗃️ Historical Data"
 ])
 
-# Tab 1: Prediction
-# Tab 1: Prediction
+# TAB 1: PREDICTION + MARKET OUTLOOK
+
 with tab1:
-    st.subheader("Flight Price Estimator")
+    # SPECIFIC FLIGHT PREDICTION
+    st.subheader("✈️ Flight Price Estimator")
 
-    # 1. Main Prediction Button
-    if st.button("Predict Fare", type="primary"):
-        # A. Spot Price Prediction (Random Forest)
+    col_pred_btn, col_pred_res = st.columns([1, 2])
+
+    with col_pred_btn:
+        predict_clicked = st.button("Predict Specific Fare", type="primary", use_container_width=True)
+
+    if predict_clicked:
         price = predict_price(airline_name, source_name, dest_name, stops, journey_date, dep_time, arr_time)
+        with col_pred_res:
+            st.success(f"### Estimated Fare: ₹ {int(price)}")
 
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            st.metric("Estimated Fare", f"₹ {round(price, 2)}")
-        with col2:
-            st.success(f"Route: {source_name} ➝ {dest_name} ({stops})")
+    st.markdown("---")
 
-        st.info("Spot prediction based on Random Forest Model.")
+    # MARKET OUTLOOK (Calculated Live)
+    st.subheader("📅 Market Outlook: 30-Day Trend")
+    st.caption(f"Projected price movement starting from **{journey_date}** based on historical seasonality.")
 
-        st.markdown("---")
+    if not raw_data.empty:
+        # FAIL-SAFE CALCULATION
+        # Group by Month and Day to find historical average prices
+        seasonal_profile = raw_data.groupby([raw_data['Date_of_Journey'].dt.month, raw_data['Date_of_Journey'].dt.day])[
+            'Price'].mean()
 
-        # B. ARIMA Time Series Forecast
-        st.subheader("📅 30-Day Market Forecast (ARIMA)")
+        # Generate next 30 days
+        future_dates = [journey_date + datetime.timedelta(days=i) for i in range(30)]
+        forecast_values = []
 
-        if ts_data is not None:
-            # Smart Forecasting Logic:
-            # Look for seasonal matches in the ARIMA-learned trend
-            future_dates = [journey_date + datetime.timedelta(days=i) for i in range(30)]
-            forecast_values = []
+        for date in future_dates:
+            try:
+                # Try to find specific Month-Day average
+                val = seasonal_profile.loc[(date.month, date.day)]
+            except KeyError:
+                # Fallback: Monthly average
+                try:
+                    val = seasonal_profile.loc[date.month].mean()
+                except:
+                    val = raw_data['Price'].mean()  # Ultimate fallback
 
-            for date in future_dates:
-                # Find matching month/day in historical trend
-                match = ts_data[
-                    (ts_data['Date'].dt.month == date.month) &
-                    (ts_data['Date'].dt.day == date.day)
-                    ]
+            forecast_values.append(val)
 
-                if not match.empty:
-                    val = match['ARIMA_Price'].values[0]
-                else:
-                    # Fallback to monthly average if specific day is missing
-                    monthly_match = ts_data[ts_data['Date'].dt.month == date.month]
-                    val = monthly_match['ARIMA_Price'].mean() if not monthly_match.empty else ts_data[
-                        'ARIMA_Price'].mean()
+        # Plotting the graph
+        df_forecast = pd.DataFrame({'Date': future_dates, 'Trend Price': forecast_values})
 
-                forecast_values.append(val)
+        fig_forecast = px.line(
+            df_forecast,
+            x='Date',
+            y='Trend Price',
+            markers=True,
+            title="Projected Seasonal Trend"
+        )
 
-            # Plotting
-            df_forecast = pd.DataFrame({
-                'Date': future_dates,
-                'ARIMA Trend': forecast_values
-            })
+        # Style: Purple line
+        fig_forecast.update_traces(line_color='#8A2BE2', line_width=3)
+        fig_forecast.update_layout(yaxis_title="Avg Historical Price (₹)", height=350, hovermode="x unified")
 
-            fig_forecast = px.line(
-                df_forecast,
-                x='Date',
-                y='ARIMA Trend',
-                markers=True,
-                title=f"Projected Price Trend (ARIMA Analysis)"
-            )
+        st.plotly_chart(fig_forecast, use_container_width=True)
 
-            fig_forecast.update_traces(line_color='#8A2BE2', line_width=3)
-            fig_forecast.update_layout(yaxis_title="Trend Price (₹)", hovermode="x unified", height=400)
-
-            st.write(
-                "This forecast analyzes historical seasonal patterns using an **ARIMA** model to predict market movement.")
-            st.plotly_chart(fig_forecast, use_container_width=True)
-
-            # Trend Insight
+        # Insight
+        if len(forecast_values) > 0:
             change = ((forecast_values[-1] - forecast_values[0]) / forecast_values[0]) * 100
+
             if change > 5:
-                st.warning(f"📈 **Trend Alert:** Prices expected to RISE by ~{round(change)}% soon.")
+                st.warning(f"📈 **Trend Alert:** Prices historically RISE by ~{int(change)}% in this period.")
             elif change < -5:
-                st.success(f"📉 **Good News:** Prices expected to DROP by ~{round(abs(change))}% soon.")
+                st.success(f"📉 **Opportunity:** Prices historically DROP by ~{int(abs(change))}% in this period.")
             else:
-                st.info("⚖️ **Stable Market:** No major price fluctuations expected.")
+                st.info("⚖️ **Stable Market:** Prices are expected to remain steady.")
 
-        else:
-            st.warning(
-                "⚠️ Time Series data not found. Please run 'Time_Series_Analysis.ipynb' to generate the forecast model.")
+    else:
+        st.warning(
+            "⚠️ 'Data_Train.xlsx' not found. Cannot generate market outlook. Please ensure the Excel file is in this folder.")
 
-# Tab 2: Compare Airlines (Auto-Refresh Version)
+# TAB 2: AIRLINE COMPARATOR
+
 with tab2:
     st.subheader("Compare Airlines")
-    st.write("Real-time price comparison for your selected route.")
-
-    # 1. Calculate prices automatically (No button needed)
     prices = {}
     for air in inv_airlines.values():
         p = predict_price(air, source_name, dest_name, stops, journey_date, dep_time, arr_time)
         prices[air] = p
 
-    # 2. Create DataFrame for Plotly
     df_comp = pd.DataFrame(list(prices.items()), columns=['Airline', 'Price']).sort_values('Price')
 
-    # 3. Interactive Bar Chart
-    fig = px.bar(
-        df_comp,
-        x='Price',
-        y='Airline',
-        orientation='h',
-        title="Price Comparison by Airline",
-        text_auto='.2s',
-        color='Price',
-        color_continuous_scale='Bluyl'
-    )
-
-    # Customize layout
-    fig.update_layout(showlegend=False, height=500)
+    fig = px.bar(df_comp, x='Price', y='Airline', orientation='h', text_auto='.2s',
+                 color='Price', color_continuous_scale='Bluyl')
+    fig.update_layout(showlegend=False, height=450)
     st.plotly_chart(fig, use_container_width=True)
 
-    # 4. Smart Recommendation
-    cheapest_airline = df_comp.iloc[0]['Airline']
-    cheapest_price = df_comp.iloc[0]['Price']
-    st.success(f"🏆 **Recommendation:** **{cheapest_airline}** is the cheapest option (~₹{int(cheapest_price)}).")
+    cheapest = df_comp.iloc[0]['Airline']
+    st.success(f"🏆 **Recommendation:** **{cheapest}** is the cheapest option.")
 
-# Tab 3: Time Trends (The Upgraded Tab!)
+
+# TAB 3: INTRADAY TRENDS
+
 with tab3:
-    st.subheader("Intraday Price Trends")
-    st.write("See how the price changes depending on the time of day you fly.")
-
-    # Generate data for all 24 hours
-    hours = list(range(24))
+    st.subheader("Best Time of Day to Fly")
+    hours = list(range(0, 24, 2))
     trend_prices = []
 
-    progress_bar = st.progress(0)
+    prog = st.progress(0)
     for i, h in enumerate(hours):
         t = datetime.time(h, 0)
         p = predict_price(airline_name, source_name, dest_name, stops, journey_date, t, arr_time)
         trend_prices.append(p)
-        progress_bar.progress((i + 1) / 24)
-    progress_bar.empty()  # Remove bar when done
+        prog.progress((i + 1) / len(hours))
+    prog.empty()
 
-    # Create DataFrame for Plotly
-    df_trend = pd.DataFrame({
-        'Hour of Day': hours,
-        'Estimated Price (₹)': trend_prices
-    })
+    fig_trend = px.line(x=hours, y=trend_prices, markers=True, title="Price vs. Time of Day")
+    fig_trend.update_traces(line_color='#00CC96', line_width=4)
+    fig_trend.update_layout(xaxis_title="Hour (24h)", yaxis_title="Price (₹)")
+    st.plotly_chart(fig_trend, use_container_width=True)
 
-    # Find cheapest hour
-    min_price = df_trend['Estimated Price (₹)'].min()
-    best_hour = df_trend.loc[df_trend['Estimated Price (₹)'] == min_price, 'Hour of Day'].iloc[0]
 
-    # Interactive Line Chart
-    fig = px.line(
-        df_trend,
-        x='Hour of Day',
-        y='Estimated Price (₹)',
-        title=f"Price Trend for {journey_date}",
-        markers=True
-    )
+# TAB 4: INSIGHTS
 
-    # Customizing the look
-    fig.update_traces(line_color='#00CC96', line_width=4)
-    fig.update_layout(
-        xaxis_title="Hour of Day (24h)",
-        yaxis_title="Price (₹)",
-        hovermode="x unified"  # Shows nice tooltip line
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.success(f"💡 **Smart Tip:** Flying around **{best_hour}:00** seems to be the cheapest time today!")
-
-# Tab 4: Insights
 with tab4:
-    st.subheader("Market Intelligence")
+    st.subheader("Smart Insights")
     rank = maps['airlines'][airline_name]
+    if rank < 3:
+        st.success(f"✅ **{airline_name}** is a Budget-Friendly Carrier.")
+    else:
+        st.info(f"ℹ️ **{airline_name}** is a Premium/Standard Carrier.")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if rank < 3:
-            st.success(f"✅ **Budget Carrier:** {airline_name} is historically one of the most affordable.")
-        else:
-            st.info(f"ℹ️ **Premium/Standard:** {airline_name} typically offers more amenities but may cost more.")
+    if stops == "non-stop":
+        st.warning("⚡ Non-stop flights command a price premium.")
 
-    with col2:
-        if stops == "non-stop":
-            st.warning("⚡ **Premium for Speed:** Non-stop flights often cost 15-20% more than connecting flights.")
-        else:
-            st.success("💰 **Saver Choice:** You are likely saving money by choosing a flight with stops.")
 
-# Tab 5: Data
+# TAB 5: DATA
+
 with tab5:
-    st.subheader("Historical Dataset")
+    st.subheader("Training Data Sample")
     if not raw_data.empty:
-        st.dataframe(raw_data.head(100))
-        st.caption(f"Total Records: {len(raw_data)}")
+        st.dataframe(raw_data.head(50))
     else:
         st.warning("Data_Train.xlsx not found.")
