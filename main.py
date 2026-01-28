@@ -116,7 +116,7 @@ with tab1:
     if predict_clicked:
         price = predict_price(airline_name, source_name, dest_name, stops, journey_date, dep_time, arr_time)
         with col_pred_res:
-            st.success(f"### Estimated Fare: ₹ {int(price)}")
+            st.success(f"### Estimated Fare: Rs. {int(price)}")
 
     st.markdown("---")
 
