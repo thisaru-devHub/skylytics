@@ -4,6 +4,7 @@ import joblib
 import datetime
 import plotly.express as px
 import flight_api  # Ensure flight_api.py is in the folder
+import plotly.graph_objects as go
 
 # Page Config
 st.set_page_config(
@@ -204,13 +205,91 @@ with tab3:
     fig = px.line(x=hours, y=prices, markers=True, title="Price vs Hour")
     st.plotly_chart(fig, use_container_width=True)
 
-# TAB 4: INSIGHTS
+# TAB 4: VISUAL INSIGHTS (INDEPENDENT VERSION)
 with tab4:
-    st.subheader("AI Insights")
-    if maps['airlines'][airline_name] < 3:
-        st.success("✅ Budget Carrier Selected")
+    st.subheader("👁️ Route Analytics (Live)")
+
+    # 1. FIXED MAPPING (Auto-fix spelling errors in dataset)
+    # The dataset uses "Banglore" but your dropdown uses "Bangalore"
+    name_fix = {
+        "Bangalore": "Banglore",
+        "New Delhi": "Delhi"
+    }
+    # Get the "Clean" names to search the database
+    clean_source = name_fix.get(source_name, source_name)
+    clean_dest = name_fix.get(dest_name, dest_name)
+
+    # 2. FILTER DATA (Instant - Does not wait for prediction button)
+    route_df = raw_data[
+        (raw_data['Source'] == clean_source) &
+        (raw_data['Destination'] == clean_dest)
+        ]
+
+    # Fallback: If no flights found, check the return direction
+    if route_df.empty:
+        route_df = raw_data[
+            (raw_data['Source'] == clean_dest) &
+            (raw_data['Destination'] == clean_source)
+            ]
+
+    if not route_df.empty:
+        # Convert prices to LKR (approx 3.4x) for display
+        route_df['Price_LKR'] = route_df['Price'] * 3.4
+
+        avg_price = route_df['Price_LKR'].mean()
+        min_price = route_df['Price_LKR'].min()
+        max_price = route_df['Price_LKR'].max()
+
+        # --- TOP METRICS ROW ---
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Average Market Price", f"LKR {avg_price:,.0f}")
+        m2.metric("Lowest Recorded", f"LKR {min_price:,.0f}")
+        m3.metric("Highest Recorded", f"LKR {max_price:,.0f}")
+
+        st.divider()
+
+        c1, c2 = st.columns(2)
+
+        # --- CHART 1: CHEAPEST AIRLINE ---
+        with c1:
+            st.markdown("### 🏆 Cheapest Airline")
+            # Calculate average price per airline on this route
+            air_stats = route_df.groupby('Airline')['Price_LKR'].mean().sort_values().reset_index()
+
+            fig_air = px.bar(
+                air_stats,
+                x='Airline',
+                y='Price_LKR',
+                color='Price_LKR',
+                title="Avg Price by Carrier",
+                color_continuous_scale='Bluyl'
+            )
+            st.plotly_chart(fig_air, use_container_width=True)
+
+        # --- CHART 2: BEST DAY TO FLY ---
+        with c2:
+            st.markdown("### 📅 Best Day to Fly")
+            # Create Day Name column
+            route_df['Day_Name'] = route_df['Date_of_Journey'].dt.day_name()
+
+            # Group and sort by day order
+            day_stats = route_df.groupby('Day_Name')['Price_LKR'].mean().reindex(
+                ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            ).reset_index()
+
+            fig_day = px.line(
+                day_stats,
+                x='Day_Name',
+                y='Price_LKR',
+                markers=True,
+                title="Weekly Price Pattern"
+            )
+            fig_day.update_traces(line_color='#FF4B4B', line_width=3)
+            st.plotly_chart(fig_day, use_container_width=True)
+
     else:
-        st.info("ℹ️ Premium Carrier Selected")
+        st.warning(f"No historical data found for **{source_name}** to **{dest_name}**.")
+        st.info("Try changing the Source or Destination in the sidebar to see insights.")
 
 # TAB 5: DATA
 with tab5:
