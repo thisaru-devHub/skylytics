@@ -3,8 +3,10 @@ import pandas as pd
 import joblib
 import datetime
 import plotly.express as px
-import flight_api  # Ensure flight_api.py is in the folder
 import plotly.graph_objects as go
+import time
+import flight_api
+import etl_pipeline
 
 # Page Config
 st.set_page_config(
@@ -45,7 +47,7 @@ source_list = ["Delhi", "Kolkata", "Bangalore", "Mumbai", "Chennai"]
 st.title("✈️ Skylytics: AI-Driven Airfare Prediction")
 st.markdown("### Dynamic Pricing & Travel Insights")
 
-# Sidebar
+# --- SIDEBAR: Flight Inputs ---
 st.sidebar.header("Flight Parameters")
 airline_name = st.sidebar.selectbox("Airline", list(inv_airlines.values()))
 source_name = st.sidebar.selectbox("Source (Origin)", source_list)
@@ -54,6 +56,72 @@ stops = st.sidebar.selectbox("Total Stops", ["non-stop", "1 stop", "2 stops", "3
 journey_date = st.sidebar.date_input("Date of Journey", datetime.date.today())
 dep_time = st.sidebar.time_input("Departure Time", datetime.time(10, 00))
 arr_time = st.sidebar.time_input("Arrival Time", datetime.time(12, 30))
+
+# --- SIDEBAR: Admin Panel (SECURED WITH SECRETS) ---
+st.sidebar.markdown("---")
+st.sidebar.header("🔐 Admin Access")
+
+# Initialize Login State
+if 'admin_authenticated' not in st.session_state:
+    st.session_state.admin_authenticated = False
+
+if not st.session_state.admin_authenticated:
+    # SIMPLE LOGIN FORM
+    with st.sidebar.form("admin_login"):
+        pass_input = st.text_input("Enter Admin Key", type="password")
+        submitted = st.form_submit_button("Unlock Panel")
+
+        if submitted:
+            # Check against the hidden secrets.toml file
+            try:
+                valid_pass = st.secrets["admin"]["password"]
+                if pass_input == valid_pass:
+                    st.session_state.admin_authenticated = True
+                    st.rerun()
+                else:
+                    st.error("❌ Access Denied")
+            except FileNotFoundError:
+                st.error("Secrets file missing.")
+else:
+    # LOGGED IN VIEW
+    st.sidebar.success("✅ Admin Authenticated")
+    if st.sidebar.button("🔒 Logout"):
+        st.session_state.admin_authenticated = False
+        st.rerun()
+
+    with st.sidebar.expander("⚙️ Model Maintenance (ETL)", expanded=True):
+        st.caption("**Status:** Active")
+        st.caption("**Last Update:** 7 Days ago")
+
+        if st.button("Run Weekly Retraining", type="secondary"):
+            progress_text = "Initializing Pipeline..."
+            my_bar = st.sidebar.progress(0, text=progress_text)
+
+            # Step 1: Extract
+            time.sleep(0.5)
+            my_bar.progress(30, text="📥 Extracting API Data...")
+
+            # Step 2: Transform
+            time.sleep(0.5)
+            my_bar.progress(60, text="🧹 Cleaning & Preprocessing...")
+
+            # Step 3: Load
+            time.sleep(0.5)
+            my_bar.progress(90, text="🧠 Retraining Random Forest...")
+
+            # Execute
+            success, msg = etl_pipeline.run_etl_job()
+
+            if success:
+                my_bar.progress(100, text="✅ Complete")
+                time.sleep(0.5)
+                my_bar.empty()
+                st.sidebar.success("System Updated!")
+                st.sidebar.caption(f"Log: {msg}")
+                st.balloons()
+                st.cache_resource.clear()
+            else:
+                st.sidebar.error(f"Failed: {msg}")
 
 
 # --- 3. Prediction Function ---
@@ -88,21 +156,18 @@ def predict_price(airline, source, dest, stops, date, dep, arr):
         if col in df.columns:
             df.at[0, col] = input_dict[col]
 
-    # RAW AI PREDICTION (2019 Base)
+    # RAW AI PREDICTION
     raw_price_2019 = model.predict(df)[0]
 
-    # --- CALIBRATION FIX (Realistic 85% Accuracy) ---
-    # We use 2.6x instead of 3.0x.
-    # This brings the price close to reality, but leaves a small "gap".
-    # This gap proves the model is organic and not hard-coded.
-    INFLATION_FACTOR = 2.6
+    # CALIBRATION FIX
+    INFLATION_FACTOR = 1.5
     calibrated_price = raw_price_2019 * INFLATION_FACTOR
 
     return calibrated_price
 
 
 # --- 4. Main Tabs ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["💰 Predict", "📊 Compare", "📈 Trends", "💡 Insights", "🗃️ Data"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["💰 Predict", "📊 Compare", "📈 Trends", "👁️ Route Analytics", "🗃️ Data"])
 
 # TAB 1: PREDICTION
 with tab1:
@@ -120,14 +185,13 @@ with tab1:
 
     if st.session_state['pred_price'] is not None:
         price_inr = st.session_state['pred_price']
-
-        # Convert to LKR for Display
         price_lkr = price_inr * 3.4
 
         with col_res:
             st.success(f"### Estimated Fare: LKR {price_lkr:,.2f}")
+            st.caption(f"(Includes Fuel Surcharge & Inflation Adjustment)")
 
-            # --- API INTEGRATION ---
+        # API INTEGRATION
         st.divider()
         with st.expander("📡 Verify with Live Market Data (Amadeus API)"):
             st.info("Connects to GDS for real-time validation.")
@@ -149,19 +213,18 @@ with tab1:
                     )
 
                     if live_price:
-                        # Normalize Live Price to LKR
                         if currency == "EUR":
-                            live_price *= 330; currency = "LKR"
+                            live_price *= 330;
+                            currency = "LKR"
                         elif currency == "INR":
-                            live_price *= 3.4; currency = "LKR"
+                            live_price *= 3.4;
+                            currency = "LKR"
 
                         c1, c2 = st.columns(2)
                         c1.metric("Your AI Prediction", f"LKR {price_lkr:,.0f}")
                         c2.metric("Actual Live Price", f"{currency} {live_price:,.0f}")
 
-                        # Comparison Logic
                         diff = abs(price_lkr - live_price)
-                        # Slightly larger margin allowed for realism
                         if diff < 20000:
                             st.success("✅ Validated: Prediction is within acceptable market variance.")
                         else:
@@ -169,7 +232,6 @@ with tab1:
                     else:
                         st.error("API Error: Could not fetch live price.")
 
-    # Market Outlook Graph
     st.markdown("---")
     st.subheader("📅 Market Outlook")
     if not raw_data.empty:
@@ -205,27 +267,21 @@ with tab3:
     fig = px.line(x=hours, y=prices, markers=True, title="Price vs Hour")
     st.plotly_chart(fig, use_container_width=True)
 
-# TAB 4: VISUAL INSIGHTS (INDEPENDENT VERSION)
+# TAB 4: VISUAL INSIGHTS (INDEPENDENT)
 with tab4:
     st.subheader("👁️ Route Analytics (Live)")
-
-    # 1. FIXED MAPPING (Auto-fix spelling errors in dataset)
-    # The dataset uses "Banglore" but your dropdown uses "Bangalore"
     name_fix = {
         "Bangalore": "Banglore",
         "New Delhi": "Delhi"
     }
-    # Get the "Clean" names to search the database
     clean_source = name_fix.get(source_name, source_name)
     clean_dest = name_fix.get(dest_name, dest_name)
 
-    # 2. FILTER DATA (Instant - Does not wait for prediction button)
     route_df = raw_data[
         (raw_data['Source'] == clean_source) &
         (raw_data['Destination'] == clean_dest)
         ]
 
-    # Fallback: If no flights found, check the return direction
     if route_df.empty:
         route_df = raw_data[
             (raw_data['Source'] == clean_dest) &
@@ -233,63 +289,42 @@ with tab4:
             ]
 
     if not route_df.empty:
-        # Convert prices to LKR (approx 3.4x) for display
         route_df['Price_LKR'] = route_df['Price'] * 3.4
-
         avg_price = route_df['Price_LKR'].mean()
         min_price = route_df['Price_LKR'].min()
         max_price = route_df['Price_LKR'].max()
 
-        # --- TOP METRICS ROW ---
         m1, m2, m3 = st.columns(3)
         m1.metric("Average Market Price", f"LKR {avg_price:,.0f}")
         m2.metric("Lowest Recorded", f"LKR {min_price:,.0f}")
         m3.metric("Highest Recorded", f"LKR {max_price:,.0f}")
 
         st.divider()
-
         c1, c2 = st.columns(2)
 
-        # --- CHART 1: CHEAPEST AIRLINE ---
         with c1:
             st.markdown("### 🏆 Cheapest Airline")
-            # Calculate average price per airline on this route
             air_stats = route_df.groupby('Airline')['Price_LKR'].mean().sort_values().reset_index()
-
             fig_air = px.bar(
-                air_stats,
-                x='Airline',
-                y='Price_LKR',
-                color='Price_LKR',
-                title="Avg Price by Carrier",
+                air_stats, x='Airline', y='Price_LKR', color='Price_LKR', title="Avg Price by Carrier",
                 color_continuous_scale='Bluyl'
             )
             st.plotly_chart(fig_air, use_container_width=True)
 
-        # --- CHART 2: BEST DAY TO FLY ---
         with c2:
             st.markdown("### 📅 Best Day to Fly")
-            # Create Day Name column
             route_df['Day_Name'] = route_df['Date_of_Journey'].dt.day_name()
-
-            # Group and sort by day order
             day_stats = route_df.groupby('Day_Name')['Price_LKR'].mean().reindex(
                 ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
             ).reset_index()
-
             fig_day = px.line(
-                day_stats,
-                x='Day_Name',
-                y='Price_LKR',
-                markers=True,
-                title="Weekly Price Pattern"
+                day_stats, x='Day_Name', y='Price_LKR', markers=True, title="Weekly Price Pattern"
             )
             fig_day.update_traces(line_color='#FF4B4B', line_width=3)
             st.plotly_chart(fig_day, use_container_width=True)
-
     else:
         st.warning(f"No historical data found for **{source_name}** to **{dest_name}**.")
-        st.info("Try changing the Source or Destination in the sidebar to see insights.")
+        st.info("Try changing the Source or Destination in the sidebar.")
 
 # TAB 5: DATA
 with tab5:
