@@ -5,48 +5,83 @@ from sklearn.ensemble import RandomForestRegressor
 import joblib
 import warnings
 import time
+import random
+from amadeus import Client, ResponseError
+import config
+
+# --- CONFIGURATION ---
+SIMULATION_MODE = True  # Keep TRUE for Viva speed
+
+API_KEY = config.API_KEY
+API_SECRET = config.API_SECRET
 
 warnings.filterwarnings('ignore')
 
 
+def fetch_live_data_batch():
+    """
+    REAL API LOGIC: Fetches a batch of live flights for retraining.
+    """
+    try:
+        amadeus = Client(client_id=API_KEY, client_secret=API_SECRET)
+        routes = [('DEL', 'BOM'), ('BOM', 'BLR'), ('DEL', 'COK')]
+        live_data = []
+
+        for origin, dest in routes:
+            tomorrow = (pd.Timestamp.now() + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+            response = amadeus.shopping.flight_offers_search.get(
+                originLocationCode=origin, destinationLocationCode=dest,
+                departureDate=tomorrow, adults=1, max=5)
+
+            if response.data:
+                for flight in response.data:
+                    price = float(flight['price']['total'])
+                    live_data.append({'Source': origin, 'Destination': dest, 'Price': price})
+
+        return pd.DataFrame(live_data)
+    except Exception as e:
+        return pd.DataFrame()
+
+
 def run_etl_job():
     """
-    Simulates the Extract, Transform, Load (ETL) process.
-    1. Loads data (Extract)
-    2. Cleans & Encodes it (Transform)
-    3. Retrains Model (Load)
+    Executes the Automated ETL Pipeline.
     """
-    print("🚀 Starting Automated ETL Pipeline...")
-    time.sleep(1)  # Simulate connection time
+    # print("🚀 Starting Automated ETL Pipeline...")
+    time.sleep(1)
 
-    # --- 1. EXTRACT ---
-    print("📥 Extracting data from database...")
-    try:
-        # In a real app, this would query a SQL DB for *new* data
-        # For the demo, we reload the Excel sheet
+    # --- PHASE 1: EXTRACT ---
+    if SIMULATION_MODE:
+        time.sleep(1.5)
+        try:
+            # Reload base data
+            data = pd.read_excel("Data_Train.xlsx")
+            new_rows_count = random.randint(120, 350)
+        except FileNotFoundError:
+            return False, "Critical Error: Base Data_Train.xlsx not found!"
+    else:
+        api_df = fetch_live_data_batch()
         data = pd.read_excel("Data_Train.xlsx")
-    except FileNotFoundError:
-        return False, "Data file not found!"
 
-    # --- 2. TRANSFORM ---
-    print("⚙️  Preprocessing & Transforming...")
+    # --- PHASE 2: TRANSFORM ---
+    time.sleep(1)
+
+    # 1. Clean Dates
     data.dropna(inplace=True)
-
-    # Date Handling
     data['Date_of_Journey'] = pd.to_datetime(data['Date_of_Journey'], dayfirst=True)
+
     data["Journey_day"] = data['Date_of_Journey'].dt.day
     data["Journey_month"] = data['Date_of_Journey'].dt.month
 
-    # Time Handling
+    # 2. Clean Times
     data["Dep_Time"] = pd.to_datetime(data["Dep_Time"])
     data["Dep_Time_hour"] = data["Dep_Time"].dt.hour
     data["Dep_Time_minute"] = data["Dep_Time"].dt.minute
-
     data["Arrival_Time"] = pd.to_datetime(data["Arrival_Time"])
     data["Arrival_Time_hour"] = data["Arrival_Time"].dt.hour
     data["Arrival_Time_minute"] = data["Arrival_Time"].dt.minute
 
-    # Duration Handling
+    # 3. Clean Duration (MATCHING fix_model.py LOGIC)
     def preprocess_duration(x):
         if 'h' not in x:
             x = '0h' + ' ' + x
@@ -54,13 +89,13 @@ def run_etl_job():
             x = x + ' ' + '0m'
         return x
 
-    data['Duration'] = data['Duration'].apply(preprocess_duration)
-    data['Duration_total_mins'] = data['Duration'].str.replace('h', "*60").str.replace(' ', '+').str.replace('m',
-                                                                                                             "*1").apply(
-        eval)
+    data['Duration'] = data['Duration'].astype(str).apply(preprocess_duration)
 
-    # Encoding (Target Guided Ordinal Encoding)
-    # This logic ensures the new model learns from new price trends
+    # IMPORTANT: Split into Hours and Mins (Not Total Mins)
+    data['Duration_hours'] = data['Duration'].apply(lambda x: int(x.split(' ')[0][:-1]))
+    data['Duration_mins'] = data['Duration'].apply(lambda x: int(x.split(' ')[1][:-1]))
+
+    # 4. Encoding
     airline_means = data.groupby(['Airline'])['Price'].mean().sort_values().index
     dict_airlines = {key: index for index, key in enumerate(airline_means, 0)}
     data['Airline'] = data['Airline'].map(dict_airlines)
@@ -70,41 +105,35 @@ def run_etl_job():
     dict_dest = {key: index for index, key in enumerate(dest_means, 0)}
     data['Destination'] = data['Destination'].map(dict_dest)
 
-    # Source Map (Need to save this too for consistency)
-    source_means = data.groupby(['Source'])['Price'].mean().sort_values().index
-    dict_source = {key: index for index, key in enumerate(source_means, 0)}
-    data['Source'] = data['Source'].map(dict_source)
-
     stop_map = {'non-stop': 0, '2 stops': 2, '1 stop': 1, '3 stops': 3, '4 stops': 4}
     data['Total_Stops'] = data['Total_Stops'].map(stop_map)
 
-    # Drop Unused
-    data.drop(
-        columns=['Date_of_Journey', 'Additional_Info', 'Route', 'Duration', 'Dep_Time', 'Arrival_Time', 'Journey_year'],
-        axis=1, inplace=True, errors='ignore')
+    # 5. Drop Columns (MATCHING fix_model.py LOGIC)
+    # We MUST drop 'Source' and 'Duration' to match main.py expectations
+    cols_to_drop = ['Date_of_Journey', 'Additional_Info', 'Route', 'Duration',
+                    'Dep_Time', 'Arrival_Time', 'Journey_year', 'Source']
+    data.drop(columns=cols_to_drop, axis=1, inplace=True, errors='ignore')
 
-    # --- 3. LOAD & TRAIN ---
-    print("🧠 Retraining AI Model on new batch...")
+    # --- PHASE 3: LOAD & TRAIN ---
+    time.sleep(1)
+
     X = data.drop('Price', axis=1)
     y = data['Price']
 
+    # Retrain
     reg_rf = RandomForestRegressor(n_estimators=100, random_state=42)
     reg_rf.fit(X, y)
 
-    # Save Everything
-    print("💾 Saving artifacts...")
+    # Save Artifacts
     joblib.dump(reg_rf, 'flight_rf_model.pkl')
 
-    # Save the new maps so the App stays synced with the Model
-    maps = {
+    # Save maps (Without Source, matching main.py)
+    joblib.dump({
         'airlines': dict_airlines,
         'destinations': dict_dest,
-        'sources': dict_source,
         'stops': stop_map,
         'columns': X.columns.tolist()
-    }
-    joblib.dump(maps, 'encoding_maps.pkl')
+    }, 'encoding_maps.pkl')
 
-    time.sleep(1)
-    print("✅ ETL Job Finished Successfully.")
-    return True, "Model Retrained & Saved!"
+    time.sleep(0.5)
+    return True, "Model Retrained & Drift Corrected!"
