@@ -109,7 +109,7 @@ def run_etl_job():
     data['Total_Stops'] = data['Total_Stops'].map(stop_map)
 
     # 5. Drop Columns (MATCHING fix_model.py LOGIC)
-    # We MUST drop 'Source' and 'Duration' to match main.py expectations
+    #  MUST drop 'Source' and 'Duration' to match main.py expectations
     cols_to_drop = ['Date_of_Journey', 'Additional_Info', 'Route', 'Duration',
                     'Dep_Time', 'Arrival_Time', 'Journey_year', 'Source']
     data.drop(columns=cols_to_drop, axis=1, inplace=True, errors='ignore')
