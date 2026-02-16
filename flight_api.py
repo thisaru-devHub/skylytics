@@ -36,11 +36,11 @@ def get_live_price(origin, destination, date_str):
 
     # 2. Simulation Mode (The Safety Net)
     # If API fails, we simulate a "Live Market Price"
-    # This ensures your UI always looks perfect during the demo.
+    # This ensures the UI always looks perfect during the demo.
 
     time.sleep(1.5)  # Simulate network delay (makes it look real)
 
-    # We don't have the AI price here, so we generate a range
+    #  don't have the AI price here, so we generate a range
     # based on typical flight costs (e.g., 5000 - 15000 INR)
     # The main.py will handle the currency conversion.
     simulated_price_inr = random.uniform(4500, 12000)
