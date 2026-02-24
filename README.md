@@ -33,7 +33,7 @@ Setup Instructions
 Install dependencies
 Create a .env file
 Add:
-AMADEUS_API_KEY=your_key
+AMADEUS_API_KEY=your_key, 
 AMADEUS_SECRET=your_secret
 
 Run:
