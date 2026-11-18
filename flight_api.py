@@ -3,11 +3,6 @@ import config
 import random
 import time
 
-# Initialize Amadeus
-amadeus = Client(
-    client_id=config.API_KEY,
-    client_secret=config.API_SECRET
-)
 
 
 def get_live_price(origin, destination, date_str):
@@ -17,6 +12,9 @@ def get_live_price(origin, destination, date_str):
     """
     # 1. Try Real API
     try:
+        if not config.USE_LIVE_API:
+            raise RuntimeError("No Amadeus keys configured")
+        amadeus = Client(client_id=config.API_KEY, client_secret=config.API_SECRET)
         response = amadeus.shopping.flight_offers_search.get(
             originLocationCode=origin,
             destinationLocationCode=destination,

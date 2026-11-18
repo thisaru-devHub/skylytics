@@ -1,0 +1,9 @@
+# Secrets
+.streamlit/secrets.toml
+.env
+
+# Python / IDE junk
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.idea/
